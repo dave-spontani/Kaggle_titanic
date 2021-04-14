@@ -1,0 +1,293 @@
+---
+title: "Titanic_test"
+author: "David Montani"
+date: "4/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Dieses Dokument ist eine simple Übung basierend auf dem Datensatz der Titanic von Kaggle, welcher unter folgendem Link gefunden werden kann: https://www.kaggle.com/c/titanic
+
+
+Die Ziele dieses Reports sind:
+
+0. Import, cleaning and tidying
+
+1. Datenanalyse
+
+2. Bauen von Prediction Models 
+
+Als erstes wird der Datensatz importiert, sowie auf die relevanten Informationen beschränkt. Danach beginnen wir mit einer kurzen Datenanalyse (Wer hat die Titanic überlebt?) und bauen basierend auf unseren Ergebnissen Prediction Models, welche das Überleben der Passagiere vorausagt. 
+
+Dann beginnen wir doch! Als erstes importieren wir den Datensatz und untersuchen seine Struktur:
+```{r titanic import}
+titanic <- read.csv("Data/titanic_train.csv")
+
+str(titanic)
+
+
+```
+In den Daten haben wir also 891 Datenpunkte, die alle 12 Variablen haben. Einige der Variablen sind nicht selbsterklärend - Hier sind die Offiziellen Definitionen:  
+
+sibsp:	# of siblings / spouses aboard the Titanic	
+parch:	# of parents / children aboard the Titanic	
+ticket:	Ticket number	
+fare:	Passenger fare	
+cabin:	Cabin number	
+embarked:	Port of Embarkation	C = Cherbourg, Q = Queenstown, S = Southampton
+
+Wir interessieren uns in den Daten nur für relevante Informationen. Wir werden deshalb einige Variablen as den Set entfernen, bevor wir die ersten Erkenntnisse aus dem Datensatz ziehen:
+1. "PassengerId", "Name", und "Ticket" sind alles Variablen, welche keinen Wert für die Datenanalyse generieren. Diese Variablen haben für uns keinen Untersuchungswert.
+2. Die Variable "Cabin number" hat nur 148 Werte und ist somit stark unvollständig. Des weiteren haben wir schon einen guten Indikator für den sozio-ökonomischen Stand der Passagiere in der Variable "Pclass"
+3. Die Variable "Embarked" wird ebenfalls kaum Wertvolle Informationen für uns enthalten.
+
+Wir entfernen also die Variablen "PassengerId", "Name", "Ticket", "Cabin Number" sowie "Embarked". 
+
+```{r Remove_Variables}
+
+titanic <- subset(titanic, select = -c(PassengerId, Name, Ticket, Cabin , Embarked))
+
+
+```
+
+Nun da wir den Datensatz etwas aufgeräumt haben, untersuchen wir zuletzt den Datensatz auf N/A- Values. 
+
+```{R N/A Values and MICE, include = FALSE}
+
+library(mice)
+
+```
+
+
+
+```{r MICE, include=FALSE}
+
+tempData <- mice(titanic,m=5,maxit=50,meth='pmm',seed=500)
+summary(tempData)
+
+completedtitanic <- complete(tempData,1)
+
+titanic <- completedtitanic
+
+```
+Nun können wir mit unserer Datenanalyse starten!
+
+Untersuchen wir erst einmal, ob das Sprichwort "Frauen und Kinder zuerst" auf die Titanic zutrifft:
+
+```{r Women and children}
+
+titanic$Survived <- as.factor(titanic$Survived)
+
+titanic$Pclass <- as.factor(titanic$Pclass)
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(titanic)), size = (0.75 * nrow(titanic)))
+
+titanic_train <- titanic[train_ind, ]
+
+titanic_test <- titanic[-train_ind, ]
+
+
+titanic_survivors <- subset(titanic_train, titanic_train$Survived == 1)
+str(titanic_survivors) #256/668 in diesen Trainings-Set: Verhältnis okay
+
+women_survivors <- subset(titanic_survivors, titanic_survivors$Sex == "female")
+
+men_survivors <- subset(titanic_survivors, titanic_survivors$Sex == "male")
+
+slices <- c(nrow(women_survivors), nrow(men_survivors))
+lbls <- c("Women", "Men")
+pie(slices, labels = lbls, main="Men and Women Survivors")
+
+
+counts <- table(titanic_survivors$Age)
+barplot(counts, main="Verteilung Alter",
+   xlab="Anz Jahre")
+
+mu = round(mean(titanic_survivors$Age),0)
+  
+```
+
+
+Wir erkennen also einen klaren Trend, dass Frauen in der Menge der geretteten überrepresäntiert sind. Die Altersverteilung ist jedoch etwas überraschender: Die Streuung scheint etwas Rechtsschief aufgebaut zu sein, mit einem mü von etwa `r mu` Jahren. 
+
+Des weiteren sind wir daran Interessiert, ob Menschen aus der ersten Klasse tatsächlich bessere Überlebenschancen hatten. Wir untersuchen dazu die Variable "Pclass":
+
+```{r Class}
+
+class_titanic <- table(titanic_survivors$Pclass)
+barplot(class_titanic, main="Klassen der Überlebenden",
+   xlab="Klasse")
+
+
+```
+
+Spannenderweise besteht kein so klarer Unterschied zwischen der ersten Klasse und dem Rest: Zusätzlich haben etwas mehr Passagiere aus der dritten Klasse wie aus der zweiten Klasse überlebt - was vollkommen gegen unsere Erwartungen geht. 
+
+Mit einem schneller Blick auf die Daten lässt sich die "Titanic-Hypothese" von David Cameron nur bedingt unterstützen: Rose (Weiblich, erste Klasse) hat zwar bessere Überlebenschancen als Jack (Männlich, dritte Klasse), aber bei weitem nicht so stark wie wir sie erwartet hätten.
+
+Wenden wir uns nun dem spannendsten Teil: Data Predictions. 
+
+Wir beginnen mit Decision Trees, ein gutes Tool für Voraussagen über Klassifikationen.
+Als erstes importieren wir die gebrauchten Libraries, und bauen danach einen simplen Decision Tree mit Minbuckets von 5:
+
+```{r Libraries, include = FALSE}
+library(rpart)
+library(rattle)
+library(rpart.plot)
+library(caret)
+library(ROCR)
+library(randomForest)
+```
+
+
+```{r Decision Trees}
+
+titanic_train_tree <- rpart(Survived ~., method = "class", parms = list(split = "information"), minbucket = 5, minsplit = 5, data = titanic_train)
+
+fancyRpartPlot(titanic_train_tree, main="Decision Tree Survival prediction", palettes = c("Greens", "Reds"), caption=NULL)
+
+titanic_predict_tree = predict(titanic_train_tree, newdata = titanic_test)
+
+
+
+table(titanic_predict_tree[,2]>0.5, titanic_test$Survived)
+
+
+```
+
+
+```{r Stats Trees, include = FALSE}
+
+accuracy = (123 + 57) / (223)
+
+precision = 57 / (57 + 29)
+
+recall = 57 / (57 + 14)
+
+accuracy <- round(accuracy, digits = 4)
+precision <- round(precision, digits = 4)
+recall <- round(recall, digits = 4)
+
+```
+
+Für unser einfaches Decision Tree Modell haben wir eine Accuracy von `r accuracy`, eine Precision von `r precision` und einen Recall von `r recall`. Dieses Modell hat somit Mühe, alle Überlebenden richtig zu klassifizieren. Wir versuchen das Modell etwas zu verbessern und die Precision zu erhöhen. Durch das Verwenden eines Cross-Validated Complexity Parameters und einer LossMatrix, welche die Missklassifikation von Überlebenden priorisiert, sollten wir eine bessere Precision erzielen:
+
+
+```{r Improvements CV, include= FALSE}
+
+
+folds = trainControl(method = "repeatedcv", number = 10, repeats=10) #using Industry standard
+grid = expand.grid( .cp = seq(0.0001, 0.005, 0.00005)) #changed to bigger steps and higher threshold
+
+
+train(Survived ~ ., data = titanic_train, parms=list(split="information"), method = "rpart", trControl = folds, tuneGrid = grid)
+
+```
+
+```{r Model Improved}
+#Ideal cp = 0.00345, so much more specific than others. Such a low CP is needed for classification to even occur.
+#Slant the cost as much as possible into the favor of predicting surviving
+CostMatrix = matrix(c(0,1,1000,0), byrow=TRUE, nrow=2)
+CostMatrix
+
+titanic_tree_cv = rpart(Survived ~ ., data= titanic_train, parms=list(split="information", loss = CostMatrix), method="class", cp = 0.00345)
+
+fancyRpartPlot(titanic_tree_cv, main=" New Decision Tree Survival", palettes = c("Greens", "Reds"), caption=NULL)
+
+titanic_predict_tree_cv = predict(titanic_tree_cv, newdata = titanic_test)
+
+table(titanic_predict_tree_cv[,2]>0.5, titanic_test$Survived)
+
+```
+
+
+```{r Stats Tree CV, include = FALSE}
+
+
+accuracy_cv = (66 + 107) / (223)
+
+precision_cv = 66 / (66 + 20)
+
+recall_cv = 66 / (66 + 30)
+
+accuracy_cv <- round(accuracy_cv, digits = 4)
+
+precision_cv <- round(precision_cv, digits = 4)
+
+recall_cv <- round(recall_cv, digits = 4)
+
+```
+
+Für unser verbessertes Modell haben wir eine Accuracy von `r accuracy_cv`, eine Precision von `r precision_cv` und einen Recall von `r recall_cv` - einen guten Tradeoff von Recall für eine bessere Precision. Wir können als nächstes Versuchen die Werte noch weiter zu verbessern indem wir Random Forests anwenden. 
+
+```{r Random Forests with Bagging}
+
+# Build Random Forest Model 
+set.seed(123)
+titanic_bags = randomForest(Survived ~ ., type="classification", data = titanic_train, ntree=1000, mtry = 6)
+
+
+# Make predictions
+titanic_predict_bags = predict(titanic_bags, newdata = titanic_test, type="prob")
+table(titanic_predict_bags[,2]>0.5, titanic_test$Survived)
+
+```
+
+```{r Baggin Stats}
+accuracy_bags = (67 + 115) / (223)
+
+precision_bags = 67 / (67 + 19)
+
+recall_bags = 67 / (67 + 22)
+
+accuracy_bags <- round(accuracy_bags, digits = 4)
+
+precision_bags <- round(precision_bags, digits = 4)
+
+recall_bags <- round(recall_bags, digits = 4)
+
+```
+
+Ein RF-Modell mit Baggin hat somit eine Accuracy von `r accuracy_bags`, eine Precision von `r precision_bags` und einen Recall von `r recall_bags`. Wir beobachten nun ein RF Modell ohne Bagging:
+
+```{r Random Forests}
+
+# Build Random Forest Model 
+set.seed(123)
+titanic_forest = randomForest(Survived ~ ., type="classification", data = titanic_train, ntree=1000)
+
+
+# Make predictions
+titanic_predict_forest = predict(titanic_forest, newdata = titanic_test, type="prob")
+table(titanic_predict_forest[,2]>0.5, titanic_test$Survived)
+
+
+```
+
+```{r RF Stats, include = FALSE}
+
+accuracy_forrest = (64 + 122) / (223)
+
+precision_forrest = 64 / (64 + 22)
+
+recall_forrest = 64 / (64 + 14)
+
+accuracy_forrest <- round(accuracy_forrest, digits = 4)
+
+precision_forrest <- round(precision_forrest, digits = 4)
+
+recall_forrest <- round(recall_forrest, digits = 4)
+
+```
+
+Für unser Random Forest Modell haben wir eine Accuracy von `r accuracy_forrest`, eine Precision von `r precision_forrest` und einen Recall von `r recall_forrest`. Wir gewinnen eine höhere Accuracy, jedoch bleibt unsere Precision vergleichsweise tief. Wir haben somit zwei Modelle erstellt, welche die Überlebenschancen von Passagieren mit einer Zufriedenstellender Güte voraussagen können. Mit mehr Daten zu dem Disaster wären auch andere Anwendungen denkbar gewesen, und Verbesserungen der Modelle ist zu einem gewissen Grade unter grösserem Zeitaufwand ebenfalls möglich
+
+```{r Final}
+
+print("End")
+
+```
